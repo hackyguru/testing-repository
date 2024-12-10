@@ -31,7 +31,7 @@ jobs:
           COMMIT_HASH: ${{ steps.commit.outputs.hash }}
         run: |
           # Set API URL
-          API_URL="${{ vars.NEXT_PUBLIC_API_URL || 'https://gitvault.vercel.app' }}"
+          API_URL="${{ vars.NEXT_PUBLIC_API_URL || 'https://7de2-31-205-124-186.ngrok-free.app' }}"
           echo "API URL: $API_URL"
           
           # Calculate total chunks
