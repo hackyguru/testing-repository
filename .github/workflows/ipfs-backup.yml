@@ -59,20 +59,56 @@
                 # Cleanup temporary directory
                 rm -rf $TEMP_DIR
                 
-                # Complete upload and get CID
-                RESULT=$(curl -X POST             -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}"             -H "Content-Type: application/json"             -H "X-GitHub-Repository: ${{ github.repository }}"             -H "X-GitHub-Commit-Hash: $COMMIT_HASH"             -H "X-GitHub-Username: ${{ github.actor }}"             -d "{"uploadId":"${{ env.UPLOAD_ID }}"}"             "$API_URL/api/storage/upload/complete")
+                # Complete upload with retries
+                success=false
+                retry_count=0
                 
-                echo "Result: $RESULT"
-                CID=$(echo "$RESULT" | jq -r '.cid // empty')
+                while [ $success = false ] && [ $retry_count -lt $MAX_RETRIES ]; do
+                  echo "Completing upload (Attempt $((retry_count + 1)))"
+                  
+                  COMPLETE_RESPONSE=$(curl --max-time $CURL_TIMEOUT -X POST \
+                    -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                    -H "Content-Type: application/json" \
+                    -H "X-GitHub-Repository: ${{ github.repository }}" \
+                    -H "X-GitHub-Commit-Hash: $COMMIT_HASH" \
+                    -H "X-GitHub-Username: ${{ github.actor }}" \
+                    -d "{\"uploadId\":\"${{ env.UPLOAD_ID }}\"}" \
+                    "$API_URL/api/storage/upload/complete" || echo "CURL_ERROR")
+                  
+                  if [ "$COMPLETE_RESPONSE" = "CURL_ERROR" ]; then
+                    echo "Curl failed for completion request"
+                    retry_count=$((retry_count + 1))
+                    [ $retry_count -lt $MAX_RETRIES ] && sleep 5
+                    continue
+                  fi
+                  
+                  # Validate JSON response with better error handling
+                  if echo "$COMPLETE_RESPONSE" | jq -e . >/dev/null 2>&1; then
+                    success=true
+                    echo "Upload completed successfully"
+                    
+                    # Extract CID with error handling
+                    CID=$(echo "$COMPLETE_RESPONSE" | jq -r '.cid // empty')
+                    if [ -n "$CID" ]; then
+                      echo "CID: $CID"
+                      echo "cid=$CID" >> $GITHUB_OUTPUT
+                    else
+                      echo "Error: CID not found in response"
+                      echo "Full response: $COMPLETE_RESPONSE"
+                      exit 1
+                    fi
+                  else
+                    echo "Invalid JSON response from complete endpoint"
+                    echo "Raw response: $COMPLETE_RESPONSE"
+                    retry_count=$((retry_count + 1))
+                    [ $retry_count -lt $MAX_RETRIES ] && sleep 5
+                  fi
+                done
                 
-                if [ -z "$CID" ]; then
-                  echo "Error: Failed to get CID from response"
-                  echo "Response was: $RESULT"
+                if [ $success = false ]; then
+                  echo "Failed to complete upload after $MAX_RETRIES attempts"
                   exit 1
                 fi
-                
-                echo "CID: $CID"
-                echo "cid=$CID" >> $GITHUB_OUTPUT
       
             - name: Update .gitvault and README
               if: steps.upload.outputs.cid != ''
